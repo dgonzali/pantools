@@ -648,13 +648,13 @@ No requiere argumentos. Toda la configuración (regiones, tiempos, etc.) se ajus
 
   Se realizará Commit-All a los siguientes 1 Device Group(s):
 
-    • cngfw-aws-pocpush-dg  (región/es: us-west-2)
+    • cngfw-aws-testdg  (región/es: us-west-2)
 
   Pausa entre commits : 2s
 
   ¿Deseas proceder con el Commit-All? [s/N]: s
 
-  [1/1] Enviando Commit-All → 'cngfw-aws-pocpush-dg' ... ✓  Job ID: 1234
+  [1/1] Enviando Commit-All → 'cngfw-aws-testdg' ... ✓  Job ID: 1234
 
   [OK] Todas las peticiones de Commit-All han sido enviadas.
 
@@ -667,10 +667,10 @@ No requiere argumentos. Toda la configuración (regiones, tiempos, etc.) se ajus
   Intervalo entre consultas: 30s
 
   [Intento 1/2] 14:32:10 — Consultando estado del push...
-    [us-west-2] ⏳ Commit en curso: cngfw-aws-pocpush-dg
+    [us-west-2] ⏳ Commit en curso: cngfw-aws-testdg
   ⏳ Siguiente comprobación en 30s ...
   [Intento 2/2] 14:32:40 — Consultando estado del push...
-    [us-west-2] ✓ cngfw-aws-pocpush-dg → Success  (2026-05-06T12:32:35 +0000)
+    [us-west-2] ✓ cngfw-aws-testdg → Success  (2026-05-06T12:32:35 +0000)
 
   [OK] Todos los commits han finalizado.
 
@@ -681,7 +681,7 @@ No requiere argumentos. Toda la configuración (regiones, tiempos, etc.) se ajus
   Región: us-west-2
   Device Group                             Estado          Último Commit
   ---------------------------------------- --------------- ------------------------------
-  ✓ cngfw-aws-pocpush-dg                  Success         2026-05-06T12:32:35 +0000
+  ✓ cngfw-aws-testdg                  Success         2026-05-06T12:32:35 +0000
 
 ======================================================================
   Total Device Groups procesados : 1
