@@ -11,6 +11,7 @@ Colección de scripts Python para automatizar tareas en **Palo Alto Networks Pan
 | [`01-rule_renamer.py`](#1-rule-renamer) | Renombra reglas de seguridad usando su UUID |
 | [`02-objects_search.py`](#2-objects-search) | Busca objetos de red (address/group) en reglas de seguridad por IP/red |
 | [`03-pan_device_admins.py`](#3-pan-device-admins) | Audita los administradores y roles de los firewalls conectados |
+| [`04_Commit-all_cloudaws.py`](#4-commit-all-cloud-ngfw-aws) | Realiza Commit-All a Cloud Device Groups de Cloud NGFW for AWS |
 
 ---
 
@@ -60,6 +61,7 @@ Pantools/
 ├── 01-rule_renamer.py          # Renombrador de reglas por UUID
 ├── 02-objects_search.py        # Buscador de objetos por IP/red en reglas
 ├── 03-pan_device_admins.py     # Auditor de administradores en firewalls
+├── 04_Commit-all_cloudaws.py   # Commit-All a Cloud Device Groups AWS
 ├── requirements.txt            # Dependencias Python
 └── README.md                   # Este fichero
 ```
@@ -534,3 +536,156 @@ FW-MADRID-01,007957000675956,PA-VM,11.1.6-h10,10.3.0.4,DG-PRODUCCION,operador,cu
 - **No subas el `.env` a ningún repositorio.** Añádelo al `.gitignore`.
 - El script deshabilita la verificación SSL (`verify=False`) para entornos con certificados auto-firmados. En producción, proporciona el certificado CA con `verify='/ruta/al/ca-bundle.crt'`.
 - La API Key tiene el mismo nivel de acceso que el usuario administrador asociado. Usa cuentas con el **mínimo privilegio necesario**.
+
+---
+
+---
+
+# 4. Commit-All Cloud NGFW AWS
+
+Script Python para realizar un **Commit-All** a los Cloud Device Groups de **Palo Alto Cloud NGFW for AWS** gestionados desde Panorama. Descubre automáticamente qué regiones AWS tienen firewalls desplegados, solicita confirmación antes de actuar, y monitoriza el estado del push hasta su finalización.
+
+## Flujo de ejecución
+
+```
+FASE 1 — Descubrimiento
+  Para cada región AWS configurada:
+    → API: show plugins aws cngfw-resources (region=X)
+    → Si hay firewalls: guarda el device_group_name
+          │
+          ▼
+FASE 2 — Confirmación + Commit-All
+  Muestra resumen de Device Groups encontrados
+  Pide confirmación [s/N] al usuario
+  Para cada Device Group:
+    → API: commit all shared-policy (entry name=DG)
+    → Espera COMMIT_DELAY_SECONDS entre peticiones
+          │
+          ▼
+FASE 3 — Monitorización
+  Espera inicial POLL_INTERVAL_SECONDS
+  Mínimo MIN_POLL_ATTEMPTS consultas garantizadas
+  Bucle: consulta estado por región cada POLL_INTERVAL_SECONDS
+    → Si last_committed_state == "Committing": sigue esperando
+    → Si estado final (Success/Error): registra resultado
+          │
+          ▼
+FASE 4 — Resumen final
+  Tabla por región: Device Group | Estado | Fecha último commit
+```
+
+## Parámetros configurables
+
+Se editan directamente en el script (sección superior):
+
+| Variable | Por defecto | Descripción |
+|----------|-------------|-------------|
+| `AWS_REGIONS` | Lista de 20 regiones | Regiones AWS donde buscar Cloud NGFWs desplegados |
+| `COMMIT_DELAY_SECONDS` | `2` | Pausa (s) entre peticiones de Commit-All consecutivas |
+| `POLL_INTERVAL_SECONDS` | `30` | Intervalo (s) entre consultas de estado del push |
+| `MIN_POLL_ATTEMPTS` | `2` | Mínimo de rondas de monitorización garantizadas |
+| `TIMEOUT` | `60` | Timeout HTTP para llamadas a Panorama |
+
+## Llamadas API
+
+### Fase 1 — Descubrimiento de Cloud NGFWs por región
+
+| Campo | Valor |
+|-------|-------|
+| `type` | `op` |
+| `cmd` | `<show><plugins><aws><cngfw-resources><tenant-name>All</tenant-name><region>REGION</region><tenant-id>All</tenant-id></cngfw-resources></aws></plugins></show>` |
+
+La respuesta incluye un JSON embebido en el elemento `<msg>`. El script parsea `result.entry` y extrae `device_group_name`. Si `entry` es una cadena vacía (`""`), no hay firewalls en esa región.
+
+### Fase 2 — Commit-All al Device Group
+
+| Campo | Valor |
+|-------|-------|
+| `type` | `commit` |
+| `action` | `all` |
+| `cmd` | `<commit-all><shared-policy><device-group><entry name="DG_NAME"/></device-group></shared-policy></commit-all>` |
+
+Panorama devuelve un `job-id` que identifica la tarea encolada.
+
+### Fase 3 — Monitorización del estado
+
+Se reutiliza la misma llamada de descubrimiento (Fase 1) por región. El campo clave es `last_committed_state`:
+
+| Valor | Significado |
+|-------|-------------|
+| `Committing` | Push en curso, seguir esperando |
+| `Success` | Push completado con éxito |
+| Cualquier otro | Finalizado con error o estado desconocido |
+
+> ⚠️ Panorama puede tardar unos segundos en actualizar el campo `last_committed_state` a `Committing` tras encolar el job. Por eso se garantizan al menos `MIN_POLL_ATTEMPTS` consultas antes de considerar el commit finalizado.
+
+## Uso
+
+```bash
+python 04_Commit-all_cloudaws.py
+```
+
+No requiere argumentos. Toda la configuración (regiones, tiempos, etc.) se ajusta editando las variables del bloque **Parámetros configurables** al inicio del script.
+
+## Salida esperada
+
+```
+======================================================================
+  FASE 1 — Descubrimiento de Cloud NGFWs por región AWS
+======================================================================
+  Panorama : https://panorama.ejemplo.com
+  Regiones a consultar: 20
+======================================================================
+
+  [>] Consultando región: us-east-1 ... —  Sin firewalls desplegados
+  [>] Consultando región: us-west-2 ... ✓  1 firewall(s) encontrado(s)
+  [>] Consultando región: eu-west-1 ... —  Sin firewalls desplegados
+  ...
+
+======================================================================
+  FASE 2 — Commit-All a Cloud Device Groups
+======================================================================
+
+  Se realizará Commit-All a los siguientes 1 Device Group(s):
+
+    • cngfw-aws-pocpush-dg  (región/es: us-west-2)
+
+  Pausa entre commits : 2s
+
+  ¿Deseas proceder con el Commit-All? [s/N]: s
+
+  [1/1] Enviando Commit-All → 'cngfw-aws-pocpush-dg' ... ✓  Job ID: 1234
+
+  [OK] Todas las peticiones de Commit-All han sido enviadas.
+
+  Esperando 30s antes de iniciar la monitorización...
+
+======================================================================
+  FASE 3 — Monitorización del estado del Commit-All
+======================================================================
+  Mínimo de comprobaciones : 2
+  Intervalo entre consultas: 30s
+
+  [Intento 1/2] 14:32:10 — Consultando estado del push...
+    [us-west-2] ⏳ Commit en curso: cngfw-aws-pocpush-dg
+  ⏳ Siguiente comprobación en 30s ...
+  [Intento 2/2] 14:32:40 — Consultando estado del push...
+    [us-west-2] ✓ cngfw-aws-pocpush-dg → Success  (2026-05-06T12:32:35 +0000)
+
+  [OK] Todos los commits han finalizado.
+
+======================================================================
+  RESUMEN FINAL — Commit-All Cloud NGFW for AWS
+======================================================================
+
+  Región: us-west-2
+  Device Group                             Estado          Último Commit
+  ---------------------------------------- --------------- ------------------------------
+  ✓ cngfw-aws-pocpush-dg                  Success         2026-05-06T12:32:35 +0000
+
+======================================================================
+  Total Device Groups procesados : 1
+  Commits exitosos               : 1
+  Commits con error/incidencia   : 0
+======================================================================
+```
