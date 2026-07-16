@@ -2,34 +2,129 @@
 """
 05_pan_policy_test.py
 ---------------------
-Determina qué regla de seguridad de Panorama aplicaría primero a un flujo
-de tráfico dado, siguiendo el orden real de evaluación de PAN-OS:
+Simula que regla de seguridad de Panorama aplicaria primero a un flujo de
+trafico dado, siguiendo el orden real de evaluacion de PAN-OS:
 
   shared pre -> padres pre (raiz->hoja) -> DG pre
-  -> DG post -> padres post (hoja->raiz) -> shared post
+               -> DG post -> padres post (hoja->raiz) -> shared post
 
-Uso:
+La jerarquia de Device Groups se infiere de un mapa estatico (STATIC_DG_PARENT_MAP)
+que debe mantenerse actualizado con la estructura real de Panorama.
+
+========================================================================
+USO
+========================================================================
+
   python 05_pan_policy_test.py --device-group US --src-ip 10.1.1.1 --dst-ip 8.8.8.8 --dst-port udp/53
   python 05_pan_policy_test.py --device-group US --src-zone trust --dst-zone untrust --app ssl
-  python 05_pan_policy_test.py --device-group US --src-ip 10.0.0.1 --dst-ip 1.1.1.1 --dst-port tcp/443 --ignore-app
+  python 05_pan_policy_test.py --device-group US --src-ip 10.0.0.1 --dst-ip 1.1.1.1 --dst-port tcp/443 --url google.com
+  python 05_pan_policy_test.py --device-group US --src-ip 10.0.0.1 --dst-ip 1.1.1.1 --dst-port tcp/443 --app ssl --ignore-app
 
-Argumentos obligatorios:
-  --device-group   Device Group objetivo
+========================================================================
+ARGUMENTOS
+========================================================================
 
-Argumentos de filtrado (todos opcionales; los no indicados se tratan como "any"):
-  --src-ip         IP de origen
-  --dst-ip         IP de destino
-  --src-port       Puerto origen: numero, tcp/num o udp/num
-  --dst-port       Puerto destino: numero, tcp/num o udp/num
-  --src-zone       Zona de origen
-  --dst-zone       Zona de destino
-  --app            Aplicacion (nombre PAN-OS)
-  --ignore-app     Ignora la aplicacion al evaluar (util si no se conoce el App-ID exacto)
+Obligatorio:
+  --device-group DG     Device Group objetivo (y sus ancestros hasta shared)
+
+Filtros de trafico (todos opcionales; los no indicados se tratan como "any"):
+  --src-ip  IP          IP de origen
+  --dst-ip  IP          IP de destino
+  --src-port PUERTO     Puerto origen:  numero, tcp/num o udp/num
+  --dst-port PUERTO     Puerto destino: numero, tcp/num o udp/num
+  --src-zone ZONA       Zona de origen
+  --dst-zone ZONA       Zona de destino
+  --app  APP            Nombre de aplicacion PAN-OS (ej: ssl, dns, openai)
+  --ignore-app          Ignora el campo application al evaluar reglas
+  --url  URL            URL o dominio a comparar contra el campo url-category
+                        de las reglas (ej: google.com, https://malware.example.com)
 
 Opciones adicionales:
-  --output FICHERO  Guarda el resultado en un fichero ademas de mostrarlo
-  --debug           Escribe traza detallada en debug.txt
-  --debug-stdout    Ademas de debug.txt, muestra las trazas por consola
+  --output FICHERO      Guarda el resultado tambien en un fichero de texto
+  --debug               Escribe traza detallada en debug.txt
+  --debug-stdout        Ademas de debug.txt, muestra las trazas por consola
+
+========================================================================
+LOGICA DE EVALUACION DE PUERTOS Y SERVICIOS
+========================================================================
+
+El script maneja cuatro tipos de campo 'service' en las reglas:
+
+1. service = any
+   -> El puerto no se filtra. Se verifica solo compatibilidad de protocolo con
+      la aplicacion (ej: ICMP no hara match en una regla con app=dns).
+
+2. service = <objeto concreto>  (ej: service-https, tcp-8080, mi-servicio)
+   -> Se resuelve el objeto contra los objetos de servicio descargados de
+      Panorama (shared + ancestros + DG). Los servicios predefinidos de PAN-OS
+      'service-http' (tcp/80) y 'service-https' (tcp/443) se incluyen siempre
+      aunque no aparezcan en la config XML.
+
+3. service = application-default  CON  app especifica (no "any")
+   -> El firewall usa los puertos por defecto del App-ID de la aplicacion.
+      El script verifica que (proto, puerto) coincida con los puertos por defecto
+      conocidos de esa app (definidos en _APP_DEFAULT).
+
+      IMPORTANTE: si el usuario NO especifica --app, el script NO podra predecir
+      que clasificara el App-ID y DESCARTARA estas reglas para evitar falsos
+      positivos. Si el usuario especifica --app, se comprueba proto+puerto contra
+      los defaults de esa app. Si usa --ignore-app, se trata como permisivo.
+
+      Ejemplo:
+        Regla: app=openai / service=application-default
+        --dst-port tcp/443                  -> NO match (no se sabe que detectara App-ID)
+        --dst-port tcp/443 --app openai     -> MATCH  (443 esta en defaults de openai)
+        --dst-port tcp/8080 --app openai    -> NO match (8080 no es puerto default de openai)
+        --dst-port tcp/443 --ignore-app     -> MATCH  (app ignorada, permisivo)
+
+4. service = application-default  CON  app = any
+   -> Se trata como permisivo (cualquier puerto puede hacer match).
+
+========================================================================
+LOGICA DE URL CATEGORY
+========================================================================
+
+Si se especifica --url:
+  - Se extrae el hostname/dominio de la URL indicada.
+  - Para cada regla evaluada, se lee el campo 'url-category' (tag XML: <category>).
+  - Si la regla no tiene url-category o es 'any': pasa sin restriccion.
+  - Si la regla tiene una Custom URL Category (definida en Panorama config):
+      Se comprueba si el dominio coincide con alguna entrada de esa categoria.
+      Patrones soportados:
+        google.com      -> coincide con google.com y cualquier subdominio
+        *.google.com    -> solo subdominios de google.com
+        .google.com     -> equivalente a *.google.com (notacion PAN-OS)
+        google.com/ruta -> solo se compara la parte host
+  - Si la regla tiene una categoria predefinida de PAN-OS (ej: social-networking):
+      No se puede resolver sin acceso a PAN-DB. Se trata como coincidencia
+      posible y se indica en el debug.
+
+NOTA: el tag XML del campo URL Category en las reglas de seguridad es <category>,
+NO <url-category>. El tag <url-category> se usa en los perfiles de URL Filtering.
+
+========================================================================
+MAPEO DE JERARQUIA DE DEVICE GROUPS
+========================================================================
+
+El script usa STATIC_DG_PARENT_MAP para determinar la cadena de ancestros
+de un Device Group. Este mapa debe actualizarse manualmente cuando se modifique
+la jerarquia de Device Groups en Panorama.
+
+Ejemplo de estructura:
+  Shared
+    America
+      US
+      LATAM
+    Europe
+      UK
+
+Representacion en el mapa:
+  STATIC_DG_PARENT_MAP = {
+      "US":    "America",
+      "LATAM": "America",
+      "UK":    "Europe",
+      # Los DGs raiz (America, Europe) no aparecen: su padre es implicitamente shared
+  }
 """
 
 import argparse
@@ -791,9 +886,24 @@ def evaluate_rule(
     effective_port  = dst_port  if dst_proto else src_port
 
     if is_app_default and not is_any_svc:
-        # service=application-default: comprobamos proto Y puerto contra los
-        # puertos por defecto de la aplicacion.
-        # Ejemplo: dns/app-default -> solo UDP/53 o TCP/53, NO TCP/443.
+        # service=application-default: el firewall identifica la app via App-ID y solo
+        # aplica la regla si la app coincide Y el trafico va por los puertos por defecto.
+        #
+        # Si la regla tiene apps especificas (no "any"):
+        #   - Usuario especifico --app: comprobamos proto+puerto contra los defaults de la app
+        #   - Usuario uso --ignore-app: pasamos (el usuario pide ignorar la app)
+        #   - Usuario NO especifico --app: NO podemos predecir que detectara App-ID
+        #     -> se descarta la regla para evitar falsos positivos
+        rule_has_specific_apps = apps and not _has_any(apps)
+        user_specified_app     = app is not None   # True solo si el usuario paso --app
+
+        if rule_has_specific_apps and not user_specified_app and not ignore_app:
+            return False, (
+                f"service=application-default con apps={apps}: sin --app especificado "
+                f"no se puede predecir el comportamiento de App-ID"
+            )
+
+        # Con app conocida (o ignore_app=True con app=any), comprobamos proto+puerto
         if not traffic_matches_app_default(apps, effective_proto, effective_port):
             return False, (
                 f"trafico {effective_proto}/{effective_port} no coincide con "

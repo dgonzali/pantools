@@ -12,6 +12,7 @@ Colección de scripts Python para automatizar tareas en **Palo Alto Networks Pan
 | [`02-objects_search.py`](#2-objects-search) | Busca objetos de red (address/group) en reglas de seguridad por IP/red |
 | [`03-pan_device_admins.py`](#3-pan-device-admins) | Audita los administradores y roles de los firewalls conectados |
 | [`04_Commit-all_cloudaws.py`](#4-commit-all-cloud-ngfw-aws) | Realiza Commit-All a Cloud Device Groups de Cloud NGFW for AWS |
+| [`05_pan_policy_test.py`](#5-pan-policy-test) | Simula qué regla de seguridad aplicaría a un flujo de tráfico determinado |
 
 ---
 
@@ -62,6 +63,8 @@ Pantools/
 ├── 02-objects_search.py        # Buscador de objetos por IP/red en reglas
 ├── 03-pan_device_admins.py     # Auditor de administradores en firewalls
 ├── 04_Commit-all_cloudaws.py   # Commit-All a Cloud Device Groups AWS
+├── 05_pan_policy_test.py       # Simulador de policy test por Device Group
+├── debug.txt                   # Log de debug (solo si se usa --debug en el script 03)
 ├── requirements.txt            # Dependencias Python
 └── README.md                   # Este fichero
 ```
@@ -442,6 +445,12 @@ python 03-pan_device_admins.py --device-group DG-PRODUCCION
 
 # Cualquier filtro + exportar a CSV
 python 03-pan_device_admins.py --device-group DG-PRODUCCION --output admins.csv
+
+# Activar modo debug (genera debug.txt)
+python 03-pan_device_admins.py --debug
+
+# Combinar debug con cualquier otro argumento
+python 03-pan_device_admins.py --device-group DG-PRODUCCION --output admins.csv --debug
 ```
 
 ### Argumentos
@@ -453,8 +462,9 @@ python 03-pan_device_admins.py --device-group DG-PRODUCCION --output admins.csv
 | `--device-name NOMBRE` | Limita la consulta al firewall con ese hostname |
 | `--device-group DG` | Limita la consulta a los firewalls del Device Group indicado |
 | `--output FICHERO.CSV` | Exporta los resultados consolidados a un fichero CSV |
+| `--debug` | Activa el modo debug y genera el fichero `debug.txt` |
 
-> `--sn`, `--device-name` y `--device-group` son **mutuamente excluyentes**. `--output` es compatible con cualquiera de ellos.
+> `--sn`, `--device-name` y `--device-group` son **mutuamente excluyentes**. `--output` y `--debug` son compatibles con cualquiera de ellos.
 
 ### Roles soportados
 
@@ -528,6 +538,83 @@ device_name,serial,model,sw_version,ip,device_groups,username,role_type,role_lab
 FW-MADRID-01,007957000675956,PA-VM,11.1.6-h10,10.3.0.4,DG-PRODUCCION,admin,superuser,Super User (acceso total),
 FW-MADRID-01,007957000675956,PA-VM,11.1.6-h10,10.3.0.4,DG-PRODUCCION,operador,custom,Rol personalizado,securityadmin
 ```
+
+---
+
+## Modo debug
+
+El flag `--debug` genera el fichero **`debug.txt`** en el directorio de trabajo con un registro completo de la ejecución. Es la herramienta principal para diagnosticar cualquier problema con el script.
+
+### Activación
+
+```bash
+python 03-pan_device_admins.py --debug
+python 03-pan_device_admins.py --device-group DG-CORP --output admins.csv --debug
+```
+
+Al activarse se muestra en consola:
+```
+[DEBUG] Modo debug activado → C:\...\Pantools\debug.txt
+```
+
+Y al finalizar:
+```
+[DEBUG] Log guardado en: C:\...\Pantools\debug.txt
+```
+
+### Contenido del fichero `debug.txt`
+
+El fichero se **sobreescribe** en cada ejecución con `--debug`. Incluye:
+
+| Sección | Qué registra |
+|---------|--------------|
+| Cabecera de sesión | Fecha/hora de inicio, URL de Panorama |
+| `[MAIN]` | Argumentos recibidos, paso de ejecución actual |
+| `[API] REQUEST` | URL completa, todos los parámetros enviados (la API Key se oculta como `***REDACTED***`) |
+| `[API] RESPONSE` | HTTP status code y cuerpo XML completo en bruto |
+| `[API]` | Estado de la respuesta (`success` / error con mensaje) |
+| `[DG_MAP]` | XPath usado, entries encontradas y mapa serial→Device Groups construido |
+| `[DEVICES]` | Entradas parseadas de `show devices connected`, dict completo de cada dispositivo |
+| `[FILTER]` | Filtro aplicado y seriales resultantes |
+| `[ADMINS]` | XPath usado por dispositivo, entries de usuario y proceso de detección de rol |
+| `[OUTPUT]` | Cada bloque de dispositivo y línea de admin que se imprime en consola |
+| `[CSV]` | Cada fila escrita en el fichero CSV |
+| Pie de sesión | Fecha/hora de fin |
+
+### Ejemplo de fragmento `debug.txt`
+
+```
+========================================================================
+  DEBUG SESSION — pan_device_admins.py
+  Inicio : 2026-05-13 14:00:00
+  Panorama: https://panorama.ejemplo.com
+========================================================================
+
+[14:00:00.123] [MAIN] Modo debug activado. Fichero de log: C:\...\debug.txt
+[14:00:00.124] [MAIN] Argumentos recibidos: sn=None device_name=None device_group='DG-CORP' output='admins.csv'
+[14:00:00.125] [MAIN] === PASO 1: Obtener dispositivos conectados ===
+[14:00:00.126] [DEVICES] Ejecutando: show devices connected
+
+  ┌─ API REQUEST ─────────────────────────────────────────────
+  │  URL    : https://panorama.ejemplo.com/api/
+  │  type   : op
+  │  cmd    : <show><devices><connected/></devices></show>
+  │  key    : ***REDACTED***
+  └────────────────────────────────────────────────────────────
+
+  ┌─ API RESPONSE ─────────────────────────────────────────────
+  │  HTTP Status: 200
+  │  Body (raw):
+  │    <response status="success"><result><devices>...
+  └────────────────────────────────────────────────────────────
+
+[14:00:00.890] [API] Respuesta OK (status=success)
+[14:00:00.891] [DEVICES] Entradas de dispositivos en la respuesta: 3
+[14:00:00.892] [DEVICES] Dispositivo parseado: {'serial': '007957...', 'name': 'FW-MADRID-01', ...}
+...
+```
+
+> ⚠️ **Nota de seguridad:** El fichero `debug.txt` contiene las respuestas XML completas de Panorama, incluyendo información de dispositivos y usuarios. **No compartas este fichero** sin revisar su contenido. La API Key nunca se escribe en el log.
 
 ---
 
@@ -661,31 +748,300 @@ No requiere argumentos. Toda la configuración (regiones, tiempos, etc.) se ajus
   Esperando 30s antes de iniciar la monitorización...
 
 ======================================================================
-  FASE 3 — Monitorización del estado del Commit-All
-======================================================================
-  Mínimo de comprobaciones : 2
-  Intervalo entre consultas: 30s
-
-  [Intento 1/2] 14:32:10 — Consultando estado del push...
-    [us-west-2] ⏳ Commit en curso: cngfw-aws-testdg
-  ⏳ Siguiente comprobación en 30s ...
-  [Intento 2/2] 14:32:40 — Consultando estado del push...
-    [us-west-2] ✓ cngfw-aws-testdg → Success  (2026-05-06T12:32:35 +0000)
-
-  [OK] Todos los commits han finalizado.
-
-======================================================================
-  RESUMEN FINAL — Commit-All Cloud NGFW for AWS
-======================================================================
-
-  Región: us-west-2
-  Device Group                             Estado          Último Commit
-  ---------------------------------------- --------------- ------------------------------
-  ✓ cngfw-aws-testdg                  Success         2026-05-06T12:32:35 +0000
-
-======================================================================
-  Total Device Groups procesados : 1
-  Commits exitosos               : 1
-  Commits con error/incidencia   : 0
-======================================================================
 ```
+
+# 5. Pan Policy Test
+
+Script Python que **simula qué regla de seguridad de Panorama aplicaría** a un flujo de tráfico determinado, sin necesidad de acceder al firewall físicamente. Evalúa las reglas en el orden correcto de prioridad de PAN-OS, recorriendo toda la jerarquía de Device Groups.
+
+## ¿Por qué este script?
+
+El `policy test` nativo de Panorama solo funciona si el tráfico ya ha pasado por un firewall real. Este script permite simular la evaluación **directamente desde la configuración de Panorama**, lo que resulta útil para:
+
+- Verificar si una política permitirá o bloqueará un flujo antes de hacer un commit.
+- Auditar qué regla aplicaría a un tráfico concreto sin acceso al firewall.
+- Troubleshooting de políticas en Device Groups con jerarquía compleja.
+
+## Lógica de evaluación
+
+El script respeta el **orden de evaluación real de PAN-OS** para un Device Group con ancestros:
+
+```
+1. shared              / pre-rulebase
+2. DG ancestro raíz    / pre-rulebase   <- de más lejano a más cercano
+3. DG ancestro N       / pre-rulebase
+4. DG objetivo         / pre-rulebase
+5. DG objetivo         / post-rulebase
+6. DG ancestro N       / post-rulebase  <- de más cercano a más lejano
+7. DG ancestro raíz    / post-rulebase
+8. shared              / post-rulebase
+```
+
+La primera regla que haga match es la que se devuelve. Si ninguna hace match, se aplica la **denegación implícita** de PAN-OS.
+
+---
+
+## Jerarquía de Device Groups (`STATIC_DG_PARENT_MAP`)
+
+La jerarquía se define mediante un mapa estático en el script. **Debe mantenerse actualizado** cuando cambie la estructura en Panorama:
+
+```python
+STATIC_DG_PARENT_MAP = {
+    "US":    "America",
+    "LATAM": "America",
+    "UK":    "Europe",
+    # Los DGs raíz (America, Europe) no aparecen: su padre es implícitamente shared
+}
+```
+
+Para la estructura `Shared -> America -> US`, la cadena de evaluación sería:
+```
+shared/pre -> America/pre -> US/pre -> US/post -> America/post -> shared/post
+```
+
+
+## Lógica de evaluación de puertos y servicios
+
+El script maneja cuatro tipos de campo `service` en las reglas:
+
+### 1. `service = any`
+
+El puerto no se filtra. Se verifica únicamente **compatibilidad de protocolo** con la aplicación (p. ej., ICMP no hará match en una regla con `app=dns`).
+
+### 2. `service = <objeto concreto>`
+
+El objeto se resuelve contra los objetos de servicio descargados de Panorama (shared + DG ancestros + DG objetivo).
+
+Los dos servicios **predefinidos de PAN-OS** se incluyen siempre, aunque no aparezcan en la config XML:
+
+| Nombre | Proto | Puerto |
+|--------|-------|--------|
+| `service-http`  | TCP | 80  |
+| `service-https` | TCP | 443 |
+
+### 3. `service = application-default` con app específica (no `any`)
+
+El firewall usa los puertos por defecto del App-ID de la aplicación. El comportamiento del script depende de si el usuario especificó `--app`:
+
+| Situación | Comportamiento |
+|-----------|----------------|
+| `--app openai` especificado | Comprueba si (proto, puerto) coincide con los defaults de `openai` |
+| `--ignore-app` especificado | Permisivo — el usuario ignora la app, no se filtran puertos |
+| **Sin `--app`** (caso habitual) | **NO hace match** — sin saber qué clasificará App-ID, no se puede determinar si la regla aplica |
+
+> **Rationale:** Una regla `app=openai / service=application-default` solo aplica si el firewall identifica el tráfico como `openai`. Sin especificar la aplicación, no es posible predecir el comportamiento del App-ID. Forzar match en este caso generaría falsos positivos.
+
+**Ejemplos con una regla `app=openai / service=application-default`:**
+
+```bash
+# SIN --app: NO match (App-ID no predecible)
+python 05_pan_policy_test.py --device-group US --dst-port tcp/443
+
+# CON --app openai, puerto en defaults (80/443): MATCH
+python 05_pan_policy_test.py --device-group US --dst-port tcp/443 --app openai
+
+# CON --app openai, puerto NO en defaults: NO match
+python 05_pan_policy_test.py --device-group US --dst-port tcp/8080 --app openai
+
+# CON --ignore-app: MATCH (permisivo)
+python 05_pan_policy_test.py --device-group US --dst-port tcp/443 --ignore-app
+```
+
+### 4. `service = application-default` con `app = any`
+
+Se trata como permisivo (cualquier puerto puede hacer match).
+
+---
+
+## Puertos por defecto de aplicaciones (`_APP_DEFAULT`)
+
+El script incluye un mapa interno de puertos por defecto para las aplicaciones más comunes. Se usa para validar `service=application-default` cuando se especifica `--app`.
+
+Categorías cubiertas: ICMP, DNS, DHCP, NTP, SNMP, TFTP, Syslog, RADIUS, TACACS, LDAP, HTTP/HTTPS/SSL, FTP, SSH, Telnet, correo (SMTP/IMAP/POP3), RDP, SMB, bases de datos (MSSQL, MySQL, Oracle, PostgreSQL, Redis), VPN (IPsec, OpenVPN), VoIP (SIP, RTP), Kerberos, NFS, BGP, y un amplio set de **aplicaciones SaaS** (OpenAI, Google, Microsoft 365, Teams, Zoom, Slack, GitHub, AWS, Azure, etc.).
+
+Para aplicaciones **no presentes en el mapa** con `application-default`:
+
+| Protocolo | Puerto | Resultado |
+|-----------|--------|-----------|
+| TCP | 80 o 443 | MATCH (puertos web estándar) |
+| TCP | Otro puerto | NO match |
+| UDP o ICMP | Cualquiera | NO match (apps desconocidas se asumen TCP/web) |
+| Sin proto/puerto | — | MATCH (sin información, no se filtra) |
+
+Para añadir una aplicación al mapa, edita `_APP_DEFAULT` en el script:
+```python
+"mi-app": [("tcp", {8443, 9000})],
+```
+
+---
+
+## Lógica de URL Category (`--url`)
+
+> **Nota técnica:** El campo URL Category en las reglas de seguridad se almacena en el XML como `<category>`, **no** como `<url-category>`. El tag `<url-category>` se usa en los perfiles de URL Filtering, que es algo diferente.
+
+Cuando se especifica `--url`:
+
+1. Se extrae el hostname/dominio de la URL indicada.
+2. Para cada regla evaluada, se lee su campo `<category>` (URL Category).
+3. Comportamiento según el valor del campo:
+
+| Valor en regla | Comportamiento |
+|----------------|----------------|
+| Vacío o `any` | Pasa sin restricción |
+| **Custom URL Category** (configurada en Panorama) | Se descarga su contenido y se comprueba si el dominio coincide |
+| **Categoría predefinida PAN-OS** (ej. `social-networking`) | No resoluble sin PAN-DB — se trata como coincidencia posible |
+
+Las Custom URL Categories se descargan de todos los scopes relevantes (shared + DG ancestros + DG objetivo).
+
+### Patrones de URL soportados en Custom URL Categories
+
+| Patrón | Coincide con |
+|--------|--------------|
+| `google.com` | `google.com` y cualquier subdominio |
+| `*.google.com` | Solo subdominios (`www.google.com`), **no** `google.com` en sí |
+| `.google.com` | Equivalente PAN-OS a `*.google.com` |
+| `google.com/maps` | Solo se compara la parte host (`google.com`) |
+
+---
+
+## Argumentos
+
+| Argumento | Obligatorio | Descripción | Ejemplo |
+|-----------|:-----------:|-------------|--------|
+| `--device-group` | ✅ | Device Group objetivo | `US` |
+| `--src-ip` | ❌ | IP de origen | `10.1.1.1` |
+| `--dst-ip` | ❌ | IP de destino | `8.8.8.8` |
+| `--src-port` | ❌ | Puerto de origen | `tcp/1024`, `udp/53`, `1024` |
+| `--dst-port` | ❌ | Puerto de destino | `tcp/443`, `udp/53`, `443` |
+| `--src-zone` | ❌ | Zona de origen | `trust` |
+| `--dst-zone` | ❌ | Zona de destino | `untrust` |
+| `--app` | ❌ | Aplicación PAN-OS (necesario para evaluar `application-default` correctamente) | `ssl`, `dns`, `openai` |
+| `--ignore-app` | ❌ | Ignora el campo application al evaluar | — |
+| `--url` | ❌ | URL/dominio para comparar con url-category de las reglas | `https://google.com` |
+| `--output` | ❌ | Guardar resultado en fichero de texto | `resultado.txt` |
+| `--debug` | ❌ | Traza detallada en `debug.txt` | — |
+| `--debug-stdout` | ❌ | Debug en consola además de fichero | — |
+
+---
+
+## Uso
+
+```bash
+# Tráfico DNS (UDP/53)
+python 05_pan_policy_test.py --device-group US --src-ip 10.1.1.1 --dst-ip 8.8.8.8 --dst-port udp/53
+
+# Tráfico HTTPS genérico (reglas con application-default+app específica serán descartadas)
+python 05_pan_policy_test.py --device-group US --src-ip 10.1.1.50 --dst-ip 8.8.8.8 --dst-port tcp/443
+
+# Tráfico HTTPS con aplicación explícita (evalúa application-default correctamente)
+python 05_pan_policy_test.py --device-group US --src-ip 10.1.1.50 --dst-ip 8.8.8.8 --dst-port tcp/443 --app ssl
+
+# Tráfico HTTPS con URL (filtra por url-category de las reglas)
+python 05_pan_policy_test.py --device-group US --src-ip 10.0.0.1 --dst-ip 8.8.8.8 --dst-port tcp/443 --url https://www.microsoft.com
+
+# Por zonas sin especificar IPs
+python 05_pan_policy_test.py --device-group US --src-zone trust --dst-zone untrust --app ssl
+
+# Ignorar la aplicación (útil si no se conoce el App-ID)
+python 05_pan_policy_test.py --device-group US --src-ip 10.0.0.1 --dst-ip 8.8.8.8 --dst-port tcp/443 --ignore-app
+
+# Guardar resultado y activar debug
+python 05_pan_policy_test.py --device-group US --src-ip 10.0.0.1 --dst-ip 8.8.8.8 --dst-port tcp/443 --output resultado.txt --debug
+```
+
+---
+
+## Salida de ejemplo
+
+```
+========================================================================
+  Panorama Policy Test — Regla aplicable
+========================================================================
+  Panorama     : https://panorama.ejemplo.com
+  Device Group : US
+  Jerarquia    : shared -> America -> US
+  IP origen    : 10.1.1.50
+  IP destino   : 8.8.8.8
+  Puerto dest  : tcp/443
+  URL          : www.microsoft.com
+========================================================================
+
+[INFO] Orden evaluacion: shared/pre -> America/pre -> US/pre -> US/post -> America/post -> shared/post
+
+[INFO] Cargando objetos de servicio...
+  [shared] 12 servicio(s)
+  [America] 0 servicio(s)
+  [US] 1 servicio(s)
+
+[INFO] Cargando custom URL categories...
+  [shared] 1 categoria(s)
+  [America] 1 categoria(s)
+  [US] 0 categoria(s)
+
+[INFO] Evaluando reglas...
+  [shared] pre-rulebase ... 13 regla(s)
+  [America] pre-rulebase ... 3 regla(s)
+
+========================================================================
+  RESULTADO: [ALLOW] ALLOW  Primera regla que aplica:
+
+  Nombre       : Prueba https
+  Ambito       : America / pre-rulebase
+  Accion       : ALLOW
+  Zona origen  : any
+  Zona destino : any
+  Source       : any
+  Destination  : 8.8.8.8
+  Aplicacion   : any
+  Servicio     : service-https
+  URL Category : Whitelist_America
+  Perfil seg.  : (sin perfil)
+  Tags         : (sin tags)
+========================================================================
+```
+
+---
+
+## Campos mostrados en el resultado
+
+| Campo | Descripción |
+|-------|-------------|
+| `Nombre` | Nombre de la regla que hace match |
+| `Ambito` | Device Group y rulebase donde está la regla |
+| `Accion` | `ALLOW` o `DENY` |
+| `Zona origen / destino` | Zonas configuradas en la regla |
+| `Source / Destination` | IPs/objetos de origen y destino |
+| `Aplicacion` | Aplicaciones configuradas en la regla |
+| `Servicio` | Servicio(s) configurados (`any`, `application-default`, objeto concreto) |
+| `URL Category` | URL categories configuradas en la regla (`any` si no tiene) |
+| `Perfil seg.` | Grupo de perfiles de seguridad asignado |
+| `Tags` | Tags configurados en la regla |
+
+---
+
+## Modo debug
+
+El flag `--debug` genera `debug.txt` con la traza completa de evaluación:
+
+```bash
+python 05_pan_policy_test.py --device-group US --dst-port tcp/443 --debug
+```
+
+El fichero incluye por cada regla evaluada: todos los checks realizados y la razón de descarte si no hace match. Para ver el debug también en consola:
+
+```bash
+python 05_pan_policy_test.py --device-group US --dst-port tcp/443 --debug --debug-stdout
+```
+
+---
+
+## Limitaciones conocidas
+
+| Limitación | Detalle |
+|------------|---------|
+| **IPs en address objects** | Si una regla usa objetos de dirección en lugar de IPs literales, el script compara el nombre del objeto, no la IP subyacente. Combinar `--src-ip`/`--dst-ip` con `--src-zone`/`--dst-zone` mejora la precisión. |
+| **`application-default` sin `--app`** | Las reglas con `service=application-default` y apps específicas se descartan si no se especifica `--app`. Comportamiento intencional para evitar falsos positivos. |
+| **Categorías URL predefinidas** | Las categorías predefinidas de PAN-OS (`social-networking`, `malware`, etc.) no están en la config XML y no se resuelven sin PAN-DB. Se tratan como coincidencia posible. |
+| **Apps desconocidas en `_APP_DEFAULT`** | Apps no presentes en el mapa interno asumen puertos web estándar (tcp/80, tcp/443) para `application-default`. Añade la app a `_APP_DEFAULT` en el script si necesitas precisión. |
+| **Jerarquía estática** | `STATIC_DG_PARENT_MAP` debe actualizarse manualmente cuando cambie la jerarquía de Device Groups en Panorama. |
+| **Solo security rules** | El script evalúa únicamente reglas de seguridad. No considera NAT, QoS, PBF ni otras políticas de PAN-OS. |
