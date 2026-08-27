@@ -336,11 +336,15 @@ def get_device_group_map() -> dict[str, list[str]]:
             {"type": "config", "action": "get", "xpath": xpath},
             label="device-group-map",
         )
-        for dg_entry in root.findall(".//entry"):
+        for dg_entry in root.findall("entry"):
             dg_name = dg_entry.get("name", "")
             if not dg_name:
                 continue
-            for dev_entry in dg_entry.findall(".//devices/entry"):
+            # Usar "devices/entry" (hijos directos), NO ".//devices/entry".
+            # El XML de Panorama anida vsys como <entry> dentro del nodo del
+            # dispositivo; con // se encontrarían esos vsys como si fueran
+            # dispositivos adicionales, repitiendo el DG N veces (una por vsys).
+            for dev_entry in dg_entry.findall("devices/entry"):
                 serial = dev_entry.get("name", "")
                 if serial:
                     serial_to_dgs.setdefault(serial, []).append(dg_name)
@@ -1881,7 +1885,7 @@ def _build_device_json(r: dict) -> dict:
                 "state":              a["account_status"],
                 "role_type":          a["role_type"],
                 "role_label":         _user_rol_str(a),
-                "role_profile":       a.get("role_name", ""),
+                "role_custom":        a.get("role_name", ""),
                 "auth_type":          _user_type_str(a),
                 "auth_profile":       a.get("auth_profile_name", ""),
                 "auth_server":        a.get("auth_server", ""),
