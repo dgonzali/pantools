@@ -8,10 +8,11 @@ gestionados desde Panorama.
 Flujo:
   1. Consulta cada región AWS configurada para detectar firewalls desplegados.
   2. Recoge los device_group_name de las regiones con firewalls activos.
-  3. Muestra un resumen y solicita confirmación al usuario.
-  4. Lanza el Commit-All a cada Cloud Device Group (uno a uno, con pausa configurable).
-  5. Monitoriza el estado del push hasta que finalice (Success / Error).
-  6. Muestra un resumen final con los resultados.
+  3. Aplica el filtro FIREWALL_NAME_FILTER (si está definido) para limitar el alcance.
+  4. Muestra un resumen y solicita confirmación al usuario (omitible con SKIP_CONFIRMATION).
+  5. Lanza el Commit-All a cada Cloud Device Group (uno a uno, con pausa configurable).
+  6. Monitoriza el estado del push hasta que finalice (Success / Error).
+  7. Muestra un resumen final con los resultados.
 
 Requisitos (.env):
   PAN_URL=https://<panorama-ip-o-fqdn>
@@ -82,6 +83,17 @@ POLL_INTERVAL_SECONDS = 30
 
 # Timeout de conexión HTTP
 TIMEOUT = 60
+
+# Si es True, no se pedirá confirmación antes de enviar el Commit-All.
+# Útil para ejecuciones desatendidas / automatizadas.
+SKIP_CONFIRMATION = False
+
+# Filtro de nombre de firewall (device_group_name).
+# Si no está vacío, solo se enviará el Commit-All a los device groups cuyo nombre
+# contenga esta cadena (búsqueda case-insensitive).
+# Ejemplo: "nth"  →  afecta a "cngfw1-nth" pero NO a "cngfw1-sth"
+# Dejar como "" para procesar todos los firewalls.
+FIREWALL_NAME_FILTER = "nth"
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +361,24 @@ def main() -> None:
 
     unique_dgs = list(dg_to_regions.keys())
 
+    # ---- Filtro por nombre de firewall ----
+    if FIREWALL_NAME_FILTER:
+        filter_lower = FIREWALL_NAME_FILTER.lower()
+        filtered_dgs = [dg for dg in unique_dgs if filter_lower in dg.lower()]
+        excluded = [dg for dg in unique_dgs if dg not in filtered_dgs]
+        print()
+        print(f"  [FILTRO] FIREWALL_NAME_FILTER = '{FIREWALL_NAME_FILTER}'")
+        if excluded:
+            print(f"  [FILTRO] Device groups excluidos ({len(excluded)}):")
+            for dg in excluded:
+                print(f"    ✗ {dg}")
+        unique_dgs = filtered_dgs
+
+        if not unique_dgs:
+            print()
+            print("[INFO] Ningún Device Group coincide con el filtro. Saliendo.")
+            sys.exit(0)
+
     # ---- Resumen pre-commit ----
     print()
     print("=" * 70)
@@ -362,18 +392,23 @@ def main() -> None:
         print(f"    • {dg}  (región/es: {regions_str})")
     print()
     print(f"  Pausa entre commits : {COMMIT_DELAY_SECONDS}s")
+    if SKIP_CONFIRMATION:
+        print("  Confirmación        : OMITIDA (SKIP_CONFIRMATION = True)")
     print()
 
     # ---- Confirmación ----
-    try:
-        confirm = input("  ¿Deseas proceder con el Commit-All? [s/N]: ").strip().lower()
-    except (KeyboardInterrupt, EOFError):
-        print("\n[INFO] Operación cancelada por el usuario.")
-        sys.exit(0)
+    if SKIP_CONFIRMATION:
+        print("  [AUTO] Procediendo sin confirmación (modo desatendido).")
+    else:
+        try:
+            confirm = input("  ¿Deseas proceder con el Commit-All? [s/N]: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print("\n[INFO] Operación cancelada por el usuario.")
+            sys.exit(0)
 
-    if confirm not in ("s", "si", "sí", "yes", "y"):
-        print("[INFO] Operación cancelada por el usuario.")
-        sys.exit(0)
+        if confirm not in ("s", "si", "sí", "yes", "y"):
+            print("[INFO] Operación cancelada por el usuario.")
+            sys.exit(0)
 
     print()
 
